@@ -1,0 +1,17 @@
+# Build directories
+/bin/
+/build/
+/release/
+
+# Compiled object files and executables
+*.exe
+*.o
+*.obj
+*.dll
+*.so
+*.out
+
+# Editor directories
+.vscode/
+.vs/
+*.suo
