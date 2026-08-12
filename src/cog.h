@@ -195,7 +195,35 @@ void cog_draw_texture(cog_window* window, cog_texture* texture, float x, float y
 
 void cog_render(cog_window *window);
 
+/**
+ * Color conversion functions
+ * 
+ * @note All hex values use RGBA channel order:
+ *       - Bits 31-24: Red channel
+ *       - Bits 23-16: Green channel
+ *       - Bits 15-8:  Blue channel
+ *       - Bits 7-0:   Alpha channel
+ *       Example: 0xFF8000FF = Red:255, Green:128, Blue:0, Alpha:255
+ * 
+ * @note Float values are expected in range [0.0, 1.0]
+ * @note Unsigned char values are expected in range [0, 255]
+ * 
+ **/
+
+cog_color cog_rgba_to_color(unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+cog_color cog_rgbaf_to_color(float r, float g, float b, float a);
+cog_color cog_colorf_to_color(cog_colorf colorf);
+cog_color cog_hex_to_color(uint32_t hex_color);
+
+cog_colorf cog_rgba_to_colorf(unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+cog_colorf cog_rgbaf_to_colorf(float r, float g, float b, float a);
 cog_colorf cog_color_to_colorf(cog_color color);
+cog_colorf cog_hex_to_colorf(uint32_t hex_color);
+
+uint32_t cog_rgba_to_hex(unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+uint32_t cog_rgbaf_to_hex(float r, float g, float b, float a);
+uint32_t cog_color_to_hex(cog_color color);
+uint32_t cog_colorf_to_hex(cog_colorf colorf);
 
 bool cog_is_point_in_rect(cog_vec2 point, cog_rect rect);
 
@@ -1035,13 +1063,92 @@ void cog_render(cog_window *window) {
     _cog_reset_window(window);
 }
 
+cog_color cog_rgba_to_color(unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+    return (cog_color) { r, g, b, a };
+}
+
+cog_color cog_rgbaf_to_color(float r, float g, float b, float a) {
+    return (cog_color) {
+        (unsigned char)(r * 255.0f),
+        (unsigned char)(g * 255.0f),
+        (unsigned char)(b * 255.0f),
+        (unsigned char)(a * 255.0f)
+    };
+}
+
+cog_color cog_colorf_to_color(cog_colorf colorf) {
+    return (cog_color) {
+        (unsigned char)(colorf.r * 255.0f),
+        (unsigned char)(colorf.g * 255.0f),
+        (unsigned char)(colorf.b * 255.0f),
+        (unsigned char)(colorf.a * 255.0f)
+    };
+}
+
+cog_color cog_hex_to_color(uint32_t hex_color) {
+    return (cog_color) {
+        (unsigned char)((hex_color >> 24) & 0xff),
+        (unsigned char)((hex_color >> 16) & 0xff),
+        (unsigned char)((hex_color >> 8)  & 0xff),
+        (unsigned char)((hex_color >> 0)  & 0xff)
+    };
+}
+
+cog_colorf cog_rgba_to_colorf(unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+    return (cog_colorf) {
+        (float)r / 255.0f,
+        (float)g / 255.0f,
+        (float)b / 255.0f,
+        (float)a / 255.0f
+    };
+}
+
+cog_colorf cog_rgbaf_to_colorf(float r, float g, float b, float a) {
+    return (cog_colorf) { r, g, b, a };
+}
+
 cog_colorf cog_color_to_colorf(cog_color color) {
     return (cog_colorf) {
-        (float)color.r / 255.f,
-        (float)color.g / 255.f,
-        (float)color.b / 255.f,
-        (float)color.a / 255.f
+        (float)color.r / 255.0f,
+        (float)color.g / 255.0f,
+        (float)color.b / 255.0f,
+        (float)color.a / 255.0f
     };
+}
+
+cog_colorf cog_hex_to_colorf(uint32_t hex_color) {
+    return (cog_colorf) {
+        (float)((hex_color >> 24) & 0xff) / 255.0f,
+        (float)((hex_color >> 16) & 0xff) / 255.0f,
+        (float)((hex_color >> 8)  & 0xff) / 255.0f,
+        (float)((hex_color >> 0)  & 0xff) / 255.0f
+    };
+}
+
+uint32_t cog_rgba_to_hex(unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+    return (((uint32_t)r << 24) | ((uint32_t)g << 16) | ((uint32_t)b << 8)  | (uint32_t)a);
+}
+
+uint32_t cog_rgbaf_to_hex(float r, float g, float b, float a) {
+    return (
+        ((uint32_t)(r * 255.0f) << 24) |
+        ((uint32_t)(g * 255.0f) << 16) |
+        ((uint32_t)(b * 255.0f) << 8)  |
+        ((uint32_t)(a * 255.0f) << 0)
+    );
+}
+
+uint32_t cog_color_to_hex(cog_color color) {
+    return (((uint32_t)color.r << 24) | ((uint32_t)color.g << 16) | ((uint32_t)color.b << 8)  | (uint32_t)color.a);
+}
+
+uint32_t cog_colorf_to_hex(cog_colorf colorf) {
+    return (
+        ((uint32_t)(colorf.r * 255.0f) << 24) |
+        ((uint32_t)(colorf.g * 255.0f) << 16) |
+        ((uint32_t)(colorf.b * 255.0f) << 8)  |
+        ((uint32_t)(colorf.a * 255.0f) << 0)
+    );
 }
 
 bool cog_is_point_in_rect(cog_vec2 point, cog_rect rect) {
