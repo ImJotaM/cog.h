@@ -36,6 +36,7 @@ In all other files where you need to access the library, simply include the head
 Here is a minimal example demonstrating how to initialize a window, draw shapes, and manage the render loop.
 
 ```c
+#define COG_IMPLEMENTATION
 #include "cog.h"
 
 int main(void) {
@@ -43,11 +44,11 @@ int main(void) {
     cog_window* window = cog_create_window("cog Application", 800, 600);
     
     // Main application loop
-    while (cog_window_is_open(window)) {
-        cog_window_poll_events(window);
+    while (!cog_window_should_close(window)) {
+        cog_poll_events();
         
         // Clear the screen (assuming a clear function exists in your API)
-        cog_clear_screen(window, (cog_color){ 0, 0, 0, 255 });
+        cog_clear_background((cog_color){ 0, 0, 0, 255 });
 
         // Queue rendering operations
         cog_draw_rectangle(window, 100, 100, 200, 150, (cog_color){ 255, 0, 0, 255 });
