@@ -9,6 +9,7 @@ default: build-release
 build-release:
     mkdir -p release
     python ./scripts/embed.py ./src/cog.h ./vendor/stb_image.h stb_image.h ./release/cog.h
+    python ./scripts/embed.py ./release/cog.h ./vendor/stb_truetype.h stb_truetype.h ./release/cog.h
 
 # --- Examples ---
 compile-example example: build-release

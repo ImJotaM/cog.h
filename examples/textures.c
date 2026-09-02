@@ -5,9 +5,9 @@ int main() {
 
     cog_window* window = cog_create_window("Primitives Example", 1280, 720);
 
-    cog_texture* texture_1 = cog_load_texture("examples/assets/texture_example_1.jpg");
-    cog_texture* texture_2 = cog_load_texture("examples/assets/texture_example_2.jpeg");
-    cog_texture* texture_3 = cog_load_texture("examples/assets/texture_example_3.png");
+    cog_texture* texture_1 = cog_load_texture("examples/assets/textures/texture_example_1.jpg");
+    cog_texture* texture_2 = cog_load_texture("examples/assets/textures/texture_example_2.jpeg");
+    cog_texture* texture_3 = cog_load_texture("examples/assets/textures/texture_example_3.png");
 
     while(!cog_window_should_close(window)) {
         cog_poll_events();

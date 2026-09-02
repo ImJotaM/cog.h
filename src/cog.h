@@ -66,6 +66,8 @@ typedef struct {
     int channels;
 } cog_texture;
 
+typedef struct cog_font cog_font;
+
 typedef struct cog_window cog_window;
 
 typedef enum {
@@ -185,6 +187,9 @@ bool cog_is_mouse_button_up(cog_window* window, cog_mouse_button mouse_button);
 cog_texture* cog_load_texture(const char* filepath);
 void cog_destroy_texture(cog_texture* texture);
 
+cog_font* cog_load_font(const char* filepath);
+void cog_destroy_font(cog_font* font);
+
 void cog_clear_background(cog_color color);
 
 void cog_draw_rectangle(cog_window* window, float x, float y, int width, int height, cog_color color);
@@ -192,6 +197,8 @@ void cog_draw_triangle(cog_window* window, cog_vec2 p1, cog_vec2 p2, cog_vec2 p3
 void cog_draw_circle(cog_window* window, float x, float y, float radius, cog_color color);
 
 void cog_draw_texture(cog_window* window, cog_texture* texture, float x, float y, float width, float height, cog_color color);
+
+void cog_draw_text(cog_window* window, cog_font* font, const char* text, float x, float y, float fontsize, cog_color color);
 
 void cog_render(cog_window *window);
 
@@ -227,6 +234,8 @@ uint32_t cog_colorf_to_hex(cog_colorf colorf);
 
 bool cog_is_point_in_rect(cog_vec2 point, cog_rect rect);
 
+cog_vec2 cog_measure_text(cog_font* font, const char* text, float fontsize);
+
 #endif // COG_H
 
 
@@ -234,6 +243,9 @@ bool cog_is_point_in_rect(cog_vec2 point, cog_rect rect);
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
+
+#define STB_TRUETYPE_IMPLEMENTATION
+#include <stb_truetype.h>
 
 #include <GL/gl.h>
 
@@ -316,6 +328,29 @@ struct cog_window {
     bool should_close;
     cog_events events;
     cog_renderer* renderer;
+};
+
+typedef struct {
+    uint32_t codepoint;
+    float u0, v0, u1, v1;
+    float x0, y0, x1, y1;
+    float x_offset;
+} cog_glyph;
+
+struct cog_font {
+    cog_texture* texture;
+    float size;
+    float scale;
+    stbtt_fontinfo info;
+    unsigned char* raw_data;
+
+    cog_glyph* glyphs;
+    size_t glyph_count;
+    size_t glyph_capacity;
+
+    int atlas_cursor_x;
+    int atlas_cursor_y;
+    int max_row_height;
 };
 
 #define GL_FRAGMENT_SHADER 0x8B30
@@ -652,6 +687,111 @@ static unsigned int _cog_load_texture_data(unsigned char* data, int width, int h
     return texture_id;
 }
 
+static uint32_t _cog_utf8_decode(const char** text) {
+    const unsigned char* s = (const unsigned char*)(*text);
+    if (!s || !*s) return 0;
+
+    uint32_t cp = 0;
+    if (*s < 0x80) {
+        cp = *s;
+        *text += 1;
+    } else if ((*s & 0xE0) == 0xC0) {
+        cp = ((*s & 0x1F) << 6) | (s[1] & 0x3F);
+        *text += 2;
+    } else if ((*s & 0xF0) == 0xE0) {
+        cp = ((*s & 0x0F) << 12) | ((s[1] & 0x3F) << 6) | (s[2] & 0x3F);
+        *text += 3;
+    } else if ((*s & 0xF8) == 0xF0) {
+        cp = ((*s & 0x07) << 18) | ((s[1] & 0x3F) << 12) | ((s[2] & 0x3F) << 6) | (s[3] &0x3F);
+        *text += 4;
+    } else {
+        *text += 1;
+    }
+    return cp;
+}
+
+static cog_glyph* _cog_get_or_load_glyph(cog_font* font, uint32_t codepoint) {
+    for (size_t i = 0; i < font->glyph_count; i++) {
+        if (font->glyphs[i].codepoint == codepoint) {
+            return &font->glyphs[i];
+        }
+    }
+
+    int glyph_index = stbtt_FindGlyphIndex(&font->info, (int)codepoint);
+    if (glyph_index == 0 && codepoint != ' ') {
+        // Glyph not supported by font
+        return NULL;
+    }
+
+    int advance_width, left_side_bearing;
+    stbtt_GetCodepointHMetrics(&font->info, (int)codepoint, &advance_width, &left_side_bearing);
+
+    int ix0, iy0, ix1, iy1;
+    stbtt_GetCodepointBitmapBox(&font->info, (int)codepoint, font->scale, font->scale, &ix0, &iy0, &ix1, &iy1);
+
+    int gw = ix1 - ix0;
+    int gh = iy1 - iy0;
+
+    if (font->atlas_cursor_x + gw + 1 >= font->texture->width) {
+        font->atlas_cursor_y += font->max_row_height + 1;
+        font->atlas_cursor_x = 1;
+        font->max_row_height = 0;
+    }
+
+    if (font->atlas_cursor_y + gh + 1 >= font->texture->height) {
+        fprintf(stderr, "Warning: Font atlas texture is full\n");
+        return NULL;
+    }
+
+    if (gh > font->max_row_height) {
+        font->max_row_height = gh;
+    }
+
+    int px = font->atlas_cursor_x;
+    int py = font->atlas_cursor_y;
+
+    if (gw > 0 && gh > 0) {
+        unsigned char* mono_bitmap = (unsigned char*)calloc(gw * gh, 1);
+        stbtt_MakeCodepointBitmap(&font->info, mono_bitmap, gw, gh, gw, font->scale, font->scale, (int)codepoint);
+
+        unsigned char* rgba_bitmap = (unsigned char*)malloc(gw * gh * 4);
+        for (int i = 0; i < gw * gh; i++) {
+            rgba_bitmap[i * 4 + 0] = 255;
+            rgba_bitmap[i * 4 + 1] = 255;
+            rgba_bitmap[i * 4 + 2] = 255;
+            rgba_bitmap[i * 4 + 3] = mono_bitmap[i];
+        }
+
+        glBindTexture(GL_TEXTURE_2D, font->texture->id);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, px, py, gw, gh, GL_RGBA, GL_UNSIGNED_BYTE, rgba_bitmap);
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        free(mono_bitmap);
+        free(rgba_bitmap);
+    }
+
+    font->atlas_cursor_x += gw + 1;
+
+    if (font->glyph_count >= font->glyph_capacity) {
+        font->glyph_capacity *= 2;
+        font->glyphs = (cog_glyph*)realloc(font->glyphs, sizeof(cog_glyph) * font->glyph_capacity);
+    }
+
+    cog_glyph* g = &font->glyphs[font->glyph_count++];
+    g->codepoint = codepoint;
+    g->u0 = (float)px / (float)font->texture->width;
+    g->v0 = (float)py / (float)font->texture->height;
+    g->u1 = (float)(px + gw) / (float)font->texture->width;
+    g->v1 = (float)(py + gh) / (float)font->texture->height;
+    g->x0 = (float)ix0;
+    g->y0 = (float)iy0;
+    g->x1 = (float)ix1;
+    g->y1 = (float)iy1;
+    g->x_offset = (float)advance_width * font->scale;
+
+    return g;
+}
+
 cog_window* cog_create_window(const char *title, int width, int height) {
     cog_window *window = (cog_window*)malloc(sizeof(cog_window));
     if (!window) return NULL;
@@ -912,6 +1052,70 @@ void cog_destroy_texture(cog_texture* texture) {
     free(texture);
 }
 
+cog_font* cog_load_font(const char* filepath) {
+    FILE* file = fopen(filepath, "rb");
+    
+    if (!file) {
+        fprintf(stderr, "Error loading font: %s\n", filepath);
+        return NULL;
+    }
+
+    fseek(file, 0, SEEK_END);
+    long size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    unsigned char* data = (unsigned char*)malloc(size);
+    fread(data, 1, size, file);
+    fclose(file);
+
+    cog_font* font = (cog_font*)malloc(sizeof(cog_font));
+    font->raw_data = data;
+    font->size = 32.0f;
+
+    if (!stbtt_InitFont(&font->info, font->raw_data, 0)) {
+        free(font->raw_data);
+        free(font);
+        return NULL;
+    }
+
+    font->scale = stbtt_ScaleForPixelHeight(&font->info, font->size);
+
+    int atlas_width = 2048;
+    int atlas_height = 2048;
+    unsigned char* blank_atlas = calloc(atlas_width * atlas_height * 4, 1);
+
+    font->texture = (cog_texture*)malloc(sizeof(cog_texture));
+    font->texture->id = _cog_load_texture_data(blank_atlas, atlas_width, atlas_height, 4);
+    font->texture->width = atlas_width;
+    font->texture->height = atlas_height;
+    font->texture->channels = 4;
+    free(blank_atlas);
+
+    font->glyph_capacity = 128;
+    font->glyph_count = 0;
+    font->glyphs = (cog_glyph*)malloc(sizeof(cog_glyph) * font->glyph_capacity);
+
+    font->atlas_cursor_x = 1;
+    font->atlas_cursor_y = 1;
+    font->max_row_height = 0;
+
+    return font;
+}
+
+void cog_destroy_font(cog_font* font) {
+    if (!font) return;
+    if (font->texture) {
+        cog_destroy_texture(font->texture);
+    }
+    if (font->raw_data) {
+        free(font->raw_data);
+    }
+    if (font->glyphs) {
+        free(font->glyphs);
+    }
+    free(font);
+}
+
 void cog_clear_background(cog_color color) {
     cog_colorf c = cog_color_to_colorf(color);
     glClearColor(c.r, c.g, c.b, c.a);
@@ -919,7 +1123,6 @@ void cog_clear_background(cog_color color) {
 }
 
 void cog_draw_rectangle(cog_window* window, float x, float y, int width, int height, cog_color color) {
-
     float x1 = x;
     float y1 = y;
     float x2 = x + width;
@@ -943,7 +1146,6 @@ void cog_draw_rectangle(cog_window* window, float x, float y, int width, int hei
 }
 
 void cog_draw_triangle(cog_window* window, cog_vec2 p1, cog_vec2 p2, cog_vec2 p3, cog_color color) {
-
     float z = 0.0f;
     cog_colorf c = cog_color_to_colorf(color);
     
@@ -959,7 +1161,6 @@ void cog_draw_triangle(cog_window* window, cog_vec2 p1, cog_vec2 p2, cog_vec2 p3
 }
 
 void cog_draw_circle(cog_window* window, float x, float y, float radius, cog_color color) {
-
     float z = 0.0f;
     int segments = 32; 
     float angle_step = (2.0f * M_PI) / segments;
@@ -992,7 +1193,6 @@ void cog_draw_circle(cog_window* window, float x, float y, float radius, cog_col
 }
 
 void cog_draw_texture(cog_window* window, cog_texture* texture, float x, float y, float width, float height, cog_color color) {
-    
     float x1 = x;
     float y1 = y;
     float x2 = x + width;
@@ -1013,6 +1213,57 @@ void cog_draw_texture(cog_window* window, cog_texture* texture, float x, float y
     _cog_push_vertex(r, (cog_vertex){ x2, y2, z, c.r, c.g, c.b, c.a, 1.0f, 1.0f });
 
     batch->vertex_count += 6;
+}
+
+void cog_draw_text(cog_window* window, cog_font* font, const char* text, float x, float y, float fontsize, cog_color color) {
+    float scale = fontsize / font->size;
+
+    int ascent, descent, line_gap;
+    stbtt_GetFontVMetrics(&font->info, &ascent, &descent, &line_gap);
+    
+    float ascent_px = (float)ascent * font->scale * scale;
+    float line_height = (float)(ascent - descent + line_gap) * font->scale * scale;
+
+    float cursor_x = x;
+    float cursor_y = y + ascent_px;
+
+    cog_colorf c = cog_color_to_colorf(color);
+    cog_renderer* r = window->renderer;
+    cog_batch* batch = _cog_get_batch(r, font->texture->id);
+
+    const char* ptr = text;
+    while (*ptr) {
+        uint32_t codepoint = _cog_utf8_decode(&ptr);
+
+        if (codepoint == '\n') {
+            cursor_x = x;
+            cursor_y += line_height;
+            continue;
+        }
+
+        cog_glyph* g = _cog_get_or_load_glyph(font, codepoint);
+        if (!g) continue;
+
+        float x1 = cursor_x + g->x0 * scale;
+        float y1 = cursor_y + g->y0 * scale;
+        float x2 = cursor_x + g->x1 * scale;
+        float y2 = cursor_y + g->y1 * scale;
+        float z  = 0.0f;
+
+        if (x2 > x1 && y2 > y1) {
+            _cog_push_vertex(r, (cog_vertex){ x1, y1, z, c.r, c.g, c.b, c.a, g->u0, g->v0 });
+            _cog_push_vertex(r, (cog_vertex){ x2, y1, z, c.r, c.g, c.b, c.a, g->u1, g->v0 });
+            _cog_push_vertex(r, (cog_vertex){ x1, y2, z, c.r, c.g, c.b, c.a, g->u0, g->v1 });
+
+            _cog_push_vertex(r, (cog_vertex){ x1, y2, z, c.r, c.g, c.b, c.a, g->u0, g->v1 });
+            _cog_push_vertex(r, (cog_vertex){ x2, y1, z, c.r, c.g, c.b, c.a, g->u1, g->v0 });
+            _cog_push_vertex(r, (cog_vertex){ x2, y2, z, c.r, c.g, c.b, c.a, g->u1, g->v1 });
+
+            batch->vertex_count += 6;
+        }
+
+        cursor_x += g->x_offset * scale;
+    }
 }
 
 void cog_render(cog_window *window) {
@@ -1153,6 +1404,45 @@ uint32_t cog_colorf_to_hex(cog_colorf colorf) {
 
 bool cog_is_point_in_rect(cog_vec2 point, cog_rect rect) {
     return (rect.x <= point.x && point.x <= rect.x + rect.width) && (rect.y <= point.y && point.y <= rect.y + rect.height);
+}
+
+cog_vec2 cog_measure_text(cog_font* font, const char* text, float fontsize) {
+    float scale = fontsize / font->size;
+
+    int ascent, descent, line_gap;
+    stbtt_GetFontVMetrics(&font->info, &ascent, &descent, &line_gap);
+    float line_height = (float)(ascent - descent + line_gap) * font->scale * scale;
+
+    float max_width = 0.0f;
+    float current_width = 0.0f;
+    int line_count = 1;
+
+    const char* ptr = text;
+    while (*ptr) {
+        uint32_t codepoint = _cog_utf8_decode(&ptr);
+
+        if (codepoint == '\n') {
+            if (current_width > max_width) {
+                max_width = current_width;
+            }
+            current_width = 0.0f;
+            line_count++;
+            continue;
+        }
+
+        cog_glyph* g = _cog_get_or_load_glyph(font, codepoint);
+        if (g) {
+            current_width += g->x_offset * scale;
+        }
+    }
+
+    if (current_width > max_width) {
+        max_width = current_width;
+    }
+
+    float total_height = (float)line_count * line_height;
+
+    return (cog_vec2){ max_width, total_height };
 }
 
 #endif // COG_IMPLEMENTATION
