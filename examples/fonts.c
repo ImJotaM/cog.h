@@ -3,7 +3,7 @@
 
 int main() {
 
-    cog_window* window = cog_create_window("Primitives Example", 1280, 720);
+    cog_window* window = cog_create_window("Fonts Example", 1280, 720);
 
     cog_font* font = cog_load_font("examples/assets/fonts/0xProtoNerdFont-Regular.ttf");
     

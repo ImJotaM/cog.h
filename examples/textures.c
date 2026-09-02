@@ -3,7 +3,7 @@
 
 int main() {
 
-    cog_window* window = cog_create_window("Primitives Example", 1280, 720);
+    cog_window* window = cog_create_window("Textures Example", 1280, 720);
 
     cog_texture* texture_1 = cog_load_texture("examples/assets/textures/texture_example_1.jpg");
     cog_texture* texture_2 = cog_load_texture("examples/assets/textures/texture_example_2.jpeg");
