@@ -2,7 +2,10 @@
 #include <cog.h>
 
 int main(void) {
+    
     cog_window* window = cog_create_window("Rotation Example", 1280, 720);
+    cog_set_vsync(window, true);
+
     cog_font* font = cog_load_font("examples/assets/fonts/0xProtoNerdFont-Regular.ttf");
 
     float rotation = 0.0f;
@@ -10,7 +13,8 @@ int main(void) {
     while (!cog_window_should_close(window)) {
         cog_poll_events();
 
-        rotation += 1.0f;
+        float dt = cog_get_delta_time(window);
+        rotation += 60.0f * dt;
         if (rotation >= 360.0f) rotation -= 360.0f;
 
         cog_clear_background((cog_color){ 20, 20, 20, 255 });

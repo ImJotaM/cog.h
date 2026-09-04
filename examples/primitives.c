@@ -2,7 +2,9 @@
 #include <cog.h>
 
 int main(void) {
+    
     cog_window* window = cog_create_window("Primitives Example", 1280, 720);
+    cog_set_vsync(window, true);
 
     while (!cog_window_should_close(window)) {
         cog_poll_events();

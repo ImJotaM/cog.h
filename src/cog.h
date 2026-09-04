@@ -165,9 +165,16 @@ typedef enum {
 cog_window* cog_create_window(const char *title, int width, int height);
 void cog_destroy_window(cog_window *window);
 bool cog_window_should_close(cog_window *window);
+
+void cog_set_vsync(cog_window* window, bool enabled);
+void cog_set_target_fps(cog_window* window, int fps);
+
 int cog_get_window_width(cog_window* window);
 int cog_get_window_height(cog_window* window);
 cog_vec2 cog_get_window_size(cog_window* window);
+
+float cog_get_delta_time(cog_window* window);
+float cog_get_fps(cog_window* window);
 
 void cog_poll_events();
 
@@ -342,6 +349,10 @@ struct cog_window {
     int width;
     int height;
     bool should_close;
+    int target_fps;
+    LARGE_INTEGER timer_frequency;
+    LARGE_INTEGER last_frame_time;
+    float delta_time;
     cog_events events;
     cog_renderer* renderer;
 };
@@ -412,6 +423,9 @@ struct cog_font {
 GL_FUNCTIONS
 #undef X
 
+typedef BOOL (WINAPI *wglSwapIntervalEXT_func)(int interval);
+static wglSwapIntervalEXT_func wglSwapIntervalEXT = NULL;
+
 static void* _cog_load_gl_function(const char *name) {
     void *func = (void*)wglGetProcAddress(name);
     if (!func) {
@@ -432,6 +446,8 @@ static int _cog_init_gl_functions(void) {
     
     GL_FUNCTIONS
     #undef X
+
+    wglSwapIntervalEXT = (wglSwapIntervalEXT_func)wglGetProcAddress("wglSwapIntervalEXT");
 
     return success;
 }
@@ -938,6 +954,18 @@ cog_window* cog_create_window(const char *title, int width, int height) {
     
     window->renderer = _cog_create_renderer();
     
+    QueryPerformanceFrequency(&window->timer_frequency);
+    QueryPerformanceCounter(&window->last_frame_time);
+    window->target_fps = 0;
+    window->delta_time = 0.0f;
+
+    HMODULE winmm = LoadLibraryA("winmm.dll");
+    if (winmm) {
+        typedef UINT (WINAPI *timeBeginPeriod_t)(UINT);
+        timeBeginPeriod_t p_timeBeginPeriod = (timeBeginPeriod_t)GetProcAddress(winmm, "timeBeginPeriod");
+        if (p_timeBeginPeriod) p_timeBeginPeriod(1);
+    }
+
     return window;
 }
 
@@ -966,11 +994,30 @@ void cog_destroy_window(cog_window *window) {
         DestroyWindow(window->handle);
     }
     
+    HMODULE winmm = GetModuleHandleA("winmm.dll");
+    if (winmm) {
+        typedef UINT (WINAPI *timeEndPeriod_t)(UINT);
+        timeEndPeriod_t p_timeEndPeriod = (timeEndPeriod_t)GetProcAddress(winmm, "timeEndPeriod");
+        if (p_timeEndPeriod) p_timeEndPeriod(1);
+    }
+
     free(window);
 }
 
 bool cog_window_should_close(cog_window *window) {
     return window ? window->should_close : true;
+}
+
+void cog_set_vsync(cog_window* window, bool enabled) {
+    (void)window;
+    if (wglSwapIntervalEXT) {
+        wglSwapIntervalEXT(enabled ? 1 : 0);
+    }
+}
+
+void cog_set_target_fps(cog_window* window, int fps) {
+    if (!window) return;
+    window->target_fps = fps > 0 ? fps : 0;
 }
 
 int cog_get_window_width(cog_window* window) {
@@ -983,6 +1030,15 @@ int cog_get_window_height(cog_window* window) {
 
 cog_vec2 cog_get_window_size(cog_window* window) {
     return (cog_vec2){ window->width, window->height };
+}
+
+float cog_get_delta_time(cog_window* window) {
+    return window ? window->delta_time : 0.0f;
+}
+
+float cog_get_fps(cog_window* window) {
+    if (!window || window->delta_time <= 0.0f) return 0.0f;
+    return 1.0f / window->delta_time;
 }
 
 void cog_poll_events() {
@@ -1451,44 +1507,58 @@ void cog_render(cog_window *window) {
     if (!window) return;
     
     cog_renderer* r = window->renderer;
-    if (r->vertex_count == 0) {
-        if (window->device_context) {
-            SwapBuffers(window->device_context);
+    if (r->vertex_count > 0) {
+        glUseProgram(r->program);
+        glBindVertexArray(r->VAO);
+        glBindBuffer(GL_ARRAY_BUFFER, r->VBO);
+        
+        glUniform2f(r->loc_resolution, (float)window->width, (float)window->height);
+        
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        
+        glBufferData(GL_ARRAY_BUFFER, r->vertex_count * sizeof(cog_vertex), r->vertices, GL_DYNAMIC_DRAW);
+        
+        for (size_t i = 0; i < r->batch_count; i++) {
+            cog_batch* batch = &r->batches[i];
+            if (batch->vertex_count == 0) continue;
+            
+            glUniform1i(r->loc_use_texture, batch->texture_id > 0);
+            glBindTexture(GL_TEXTURE_2D, batch->texture_id);
+            
+            glDrawArrays(GL_TRIANGLES, batch->vertex_start, batch->vertex_count);
         }
-        _cog_reset_window(window);
-        return;
-    }
-    
-    glUseProgram(r->program);
-    glBindVertexArray(r->VAO);
-    glBindBuffer(GL_ARRAY_BUFFER, r->VBO);
-    
-    glUniform2f(r->loc_resolution, (float)window->width, (float)window->height);
-    
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    
-    glBufferData(GL_ARRAY_BUFFER, r->vertex_count * sizeof(cog_vertex), r->vertices, GL_DYNAMIC_DRAW);
-    
-    for (size_t i = 0; i < r->batch_count; i++) {
-        cog_batch* batch = &r->batches[i];
-        if (batch->vertex_count == 0) continue;
         
-        glUniform1i(r->loc_use_texture, batch->texture_id > 0);
-        glBindTexture(GL_TEXTURE_2D, batch->texture_id);
-        
-        glDrawArrays(GL_TRIANGLES, batch->vertex_start, batch->vertex_count);
+        glUniform1i(r->loc_use_texture, 0);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBindVertexArray(0);
     }
-    
-    glUniform1i(r->loc_use_texture, 0);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glBindVertexArray(0);
     
     if (window->device_context) {
         SwapBuffers(window->device_context);
     }
     
+    LARGE_INTEGER current_time;
+    QueryPerformanceCounter(&current_time);
+
+    if (window->target_fps > 0) {
+        double target_sec = 1.0 / (double)window->target_fps;
+        double elapsed = (double)(current_time.QuadPart - window->last_frame_time.QuadPart) / (double)window->timer_frequency.QuadPart;
+
+        while (elapsed < target_sec) {
+            double remaining = target_sec - elapsed;
+            if (remaining > 0.002) {
+                Sleep((DWORD)((remaining - 0.001) * 1000.0));
+            }
+            QueryPerformanceCounter(&current_time);
+            elapsed = (double)(current_time.QuadPart - window->last_frame_time.QuadPart) / (double)window->timer_frequency.QuadPart;
+        }
+    }
+
+    window->delta_time = (float)((double)(current_time.QuadPart - window->last_frame_time.QuadPart) / (double)window->timer_frequency.QuadPart);
+    window->last_frame_time = current_time;
+
     r->vertex_count = 0;
     r->batch_count = 0;
 

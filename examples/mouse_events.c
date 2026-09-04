@@ -4,6 +4,7 @@
 int main() {
 
     cog_window* window = cog_create_window("Mouse Events Example", 1280, 720);
+    cog_set_vsync(window, true);
 
     while(!cog_window_should_close(window)) {
         cog_poll_events();
