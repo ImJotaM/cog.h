@@ -249,9 +249,11 @@ cog_vec2 cog_measure_text(cog_font* font, const char* text, float fontsize);
 
 #ifdef COG_IMPLEMENTATION
 
+#define STB_IMAGE_STATIC
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
+#define STBTT_STATIC
 #define STB_TRUETYPE_IMPLEMENTATION
 #include <stb_truetype.h>
 
