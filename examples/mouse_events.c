@@ -26,7 +26,7 @@ int main() {
             printf("Middle mouse button down in position: X: %.2f, Y: %.2f\n", mouse_pos.x, mouse_pos.y);
         }
 
-        cog_clear_background((cog_color){ 0x00, 0x00, 0x00, 0xff });
+        cog_clear_background((cog_color){ 20, 20, 20, 255 });
 
         cog_render(window);
     }

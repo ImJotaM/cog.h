@@ -192,9 +192,17 @@ void cog_destroy_font(cog_font* font);
 
 void cog_clear_background(cog_color color);
 
+void cog_set_rotation(cog_window* window, float rotation);
+void cog_set_rotation_origin(cog_window* window, float rotation, cog_vec2 origin);
+void cog_reset_rotation(cog_window* window);
+
+void cog_draw_line(cog_window* window, float x1, float y1, float x2, float y2, float thickness, cog_color color);
 void cog_draw_rectangle(cog_window* window, float x, float y, int width, int height, cog_color color);
+void cog_draw_rectangle_lines(cog_window* window, float x, float y, int width, int height, float thickness, cog_color color);
 void cog_draw_triangle(cog_window* window, cog_vec2 p1, cog_vec2 p2, cog_vec2 p3, cog_color color);
-void cog_draw_circle(cog_window* window, float x, float y, float radius, cog_color color);
+void cog_draw_triangle_lines(cog_window* window, cog_vec2 p1, cog_vec2 p2, cog_vec2 p3, float thickness, cog_color color);
+void cog_draw_circle(cog_window* window, float x, float y, float radius, int segments, cog_color color);
+void cog_draw_circle_lines(cog_window* window, float x, float y, float radius, float thickness, int segments, cog_color color);
 
 void cog_draw_texture(cog_window* window, cog_texture* texture, float x, float y, float width, float height, cog_color color);
 
@@ -280,6 +288,12 @@ typedef struct {
     cog_batch* batches;
     size_t batch_count;
     size_t batch_capacity;
+
+    float rotation;
+    cog_vec2 rotation_origin;
+    cog_vec2 auto_origin;
+    float cos_rot;
+    float sin_rot;
 } cog_renderer;
 
 typedef enum {
@@ -531,10 +545,26 @@ static cog_renderer* _cog_create_renderer() {
     renderer->batch_count = 0;
     renderer->batches = (cog_batch*)malloc(sizeof(cog_batch) * renderer->batch_capacity);
 
+    renderer->rotation = 0.0f;
+    renderer->rotation_origin = (cog_vec2){ -1.0f, -1.0f };
+    renderer->auto_origin = (cog_vec2){ 0.0f, 0.0f };
+    renderer->cos_rot = 1.0f;
+    renderer->sin_rot = 0.0f;
+
     return renderer;
 }
 
 static void _cog_push_vertex(cog_renderer* renderer, cog_vertex v) {
+    if (renderer->rotation != 0.0f) {
+        cog_vec2 pivot = renderer->rotation_origin;
+        if (pivot.x == -1.0f && pivot.y == -1.0f) {
+            pivot = renderer->auto_origin;
+        }
+        float dx = v.x - pivot.x;
+        float dy = v.y - pivot.y;
+        v.x = pivot.x + (dx * renderer->cos_rot - dy * renderer->sin_rot);
+        v.y = pivot.y + (dx * renderer->sin_rot + dy * renderer->cos_rot);
+    }
     if (renderer->vertex_count >= renderer->vertex_capacity) {
         renderer->vertex_capacity *= 2;
         renderer->vertices = (cog_vertex*)realloc(renderer->vertices, sizeof(cog_vertex) * renderer->vertex_capacity);
@@ -543,9 +573,10 @@ static void _cog_push_vertex(cog_renderer* renderer, cog_vertex v) {
 }
 
 static cog_batch* _cog_get_batch(cog_renderer* renderer, unsigned int texture_id) {
-    for (size_t i = 0; i < renderer->batch_count; ++i) {
-        if (renderer->batches[i].texture_id == texture_id) {
-            return &renderer->batches[i];
+    if (renderer->batch_count > 0) {
+        cog_batch* last_batch = &renderer->batches[renderer->batch_count - 1];
+        if (last_batch->texture_id == texture_id) {
+            return last_batch;
         }
     }
 
@@ -900,7 +931,7 @@ cog_window* cog_create_window(const char *title, int width, int height) {
     ShowWindow(window->handle, SW_SHOW);
     UpdateWindow(window->handle);
     
-    glEnable(GL_DEPTH_TEST);
+    glDisable(GL_DEPTH_TEST);
     glViewport(0, 0, width, height);
     
     window->renderer = _cog_create_renderer();
@@ -1122,6 +1153,67 @@ void cog_clear_background(cog_color color) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
+void cog_set_rotation(cog_window* window, float angle) {
+    cog_set_rotation_origin(window, angle, (cog_vec2){ -1.0f, -1.0f });
+}
+
+void cog_set_rotation_origin(cog_window* window, float rotation, cog_vec2 origin) {
+    cog_renderer* r = window->renderer;
+    r->rotation = rotation;
+    r->rotation_origin = origin;
+
+    if (rotation != 0) {
+        float rad = rotation / 180.0f * (float)M_PI;
+        r->cos_rot = cosf(rad);
+        r->sin_rot = sinf(rad);
+    } else {
+        r->cos_rot = 1.0f;
+        r->sin_rot = 0.0f;
+    }
+}
+
+void cog_reset_rotation(cog_window* window) {
+    cog_set_rotation(window, 0.0f);
+}
+
+void cog_draw_line(cog_window* window, float x1, float y1, float x2, float y2, float thickness, cog_color color) {
+    
+    float nx, ny;
+
+    {
+        float dx = x2 - x1;
+        float dy = y2 - y1;
+        float lenght = sqrtf(dx * dx + dy * dy);
+        if (lenght == 0.0f) return;
+
+        nx = (-dy / lenght) * (thickness * 0.5f);
+        ny = ( dx / lenght) * (thickness * 0.5f);
+    }
+
+    float ax = x1 + nx, ay = y1 + ny;
+    float bx = x2 + nx, by = y2 + ny;
+    float cx = x1 - nx, cy = y1 - ny;
+    float dx = x2 - nx, dy = y2 - ny;
+
+    float z = 0.0f;
+    cog_colorf c = cog_color_to_colorf(color);
+
+    cog_renderer* r = window->renderer;
+    r->auto_origin = (cog_vec2){ (x1 + x2) * 0.5f, (y1 + y2) * 0.5f };
+
+    cog_batch* batch = _cog_get_batch(r, 0);
+
+    _cog_push_vertex(r, (cog_vertex){ ax, ay, z, c.r, c.g, c.b, c.a });
+    _cog_push_vertex(r, (cog_vertex){ bx, by, z, c.r, c.g, c.b, c.a });
+    _cog_push_vertex(r, (cog_vertex){ cx, cy, z, c.r, c.g, c.b, c.a });
+
+    _cog_push_vertex(r, (cog_vertex){ bx, by, z, c.r, c.g, c.b, c.a });
+    _cog_push_vertex(r, (cog_vertex){ cx, cy, z, c.r, c.g, c.b, c.a });
+    _cog_push_vertex(r, (cog_vertex){ dx, dy, z, c.r, c.g, c.b, c.a });
+
+    batch->vertex_count += 6;
+}
+
 void cog_draw_rectangle(cog_window* window, float x, float y, int width, int height, cog_color color) {
     float x1 = x;
     float y1 = y;
@@ -1131,6 +1223,7 @@ void cog_draw_rectangle(cog_window* window, float x, float y, int width, int hei
     cog_colorf c = cog_color_to_colorf(color);
 
     cog_renderer* r = window->renderer;
+    r->auto_origin = (cog_vec2){ x + width * 0.5f, y + height * 0.5f };
 
     cog_batch* batch = _cog_get_batch(r, 0);
 
@@ -1145,11 +1238,32 @@ void cog_draw_rectangle(cog_window* window, float x, float y, int width, int hei
     batch->vertex_count += 6;
 }
 
+void cog_draw_rectangle_lines(cog_window* window, float x, float y, int width, int height, float thickness, cog_color color) {
+    cog_renderer* r = window->renderer;
+    cog_vec2 prev_origin = r->rotation_origin;
+
+    if (r->rotation_origin.x == -1.0f && r->rotation_origin.y == -1.0f) {
+        r->rotation_origin = (cog_vec2){ x + width * 0.5f, y + height * 0.5f };
+    }
+
+    cog_draw_rectangle(window, x, y, width, thickness, color);
+    cog_draw_rectangle(window, x, y + height - thickness, width, thickness, color);
+    cog_draw_rectangle(window, x, y + thickness, thickness, height - 2.0f * thickness, color);
+    cog_draw_rectangle(window, x + width - thickness, y + thickness, thickness, height - 2.0f * thickness, color);
+
+    r->rotation_origin = prev_origin;
+}
+
 void cog_draw_triangle(cog_window* window, cog_vec2 p1, cog_vec2 p2, cog_vec2 p3, cog_color color) {
     float z = 0.0f;
     cog_colorf c = cog_color_to_colorf(color);
     
     cog_renderer* r = window->renderer;
+    float min_x = fminf(p1.x, fminf(p2.x, p3.x));
+    float max_x = fmaxf(p1.x, fmaxf(p2.x, p3.x));
+    float min_y = fminf(p1.y, fminf(p2.y, p3.y));
+    float max_y = fmaxf(p1.y, fmaxf(p2.y, p3.y));
+    r->auto_origin = (cog_vec2){ (min_x + max_x) * 0.5f, (min_y + max_y) * 0.5f };
 
     cog_batch* batch = _cog_get_batch(r, 0);
 
@@ -1160,13 +1274,33 @@ void cog_draw_triangle(cog_window* window, cog_vec2 p1, cog_vec2 p2, cog_vec2 p3
     batch->vertex_count += 3;
 }
 
-void cog_draw_circle(cog_window* window, float x, float y, float radius, cog_color color) {
-    float z = 0.0f;
-    int segments = 32; 
+void cog_draw_triangle_lines(cog_window* window, cog_vec2 p1, cog_vec2 p2, cog_vec2 p3, float thickness, cog_color color) {
+    cog_renderer* r = window->renderer;
+    cog_vec2 prev_origin = r->rotation_origin;
+
+    if (r->rotation_origin.x == -1.0f && r->rotation_origin.y == -1.0f) {
+        float min_x = fminf(p1.x, fminf(p2.x, p3.x));
+        float max_x = fmaxf(p1.x, fmaxf(p2.x, p3.x));
+        float min_y = fminf(p1.y, fminf(p2.y, p3.y));
+        float max_y = fmaxf(p1.y, fmaxf(p2.y, p3.y));
+        r->rotation_origin = (cog_vec2){ (min_x + max_x) * 0.5f, (min_y + max_y) * 0.5f };
+    }
+
+    cog_draw_line(window, p1.x, p1.y, p2.x, p2.y, thickness, color);
+    cog_draw_line(window, p2.x, p2.y, p3.x, p3.y, thickness, color);
+    cog_draw_line(window, p3.x, p3.y, p1.x, p1.y, thickness, color);
+
+    r->rotation_origin = prev_origin;
+}
+
+void cog_draw_circle(cog_window* window, float x, float y, float radius, int segments, cog_color color) {
+    segments = segments ? segments : 36;
     float angle_step = (2.0f * M_PI) / segments;
+    float z = 0.0f;
     cog_colorf c = cog_color_to_colorf(color);
     
     cog_renderer* r = window->renderer;
+    r->auto_origin = (cog_vec2){ x, y };
     
     cog_batch* batch = _cog_get_batch(r, 0);
 
@@ -1192,6 +1326,44 @@ void cog_draw_circle(cog_window* window, float x, float y, float radius, cog_col
     }
 }
 
+void cog_draw_circle_lines(cog_window* window, float x, float y, float radius, float thickness, int segments, cog_color color) {
+    segments = segments ? segments : 36; 
+    float angle_step = (2.0f * M_PI) / segments;
+    float r_out = radius;
+    float r_in = radius - thickness;
+    float z = 0.0f;
+    cog_colorf c = cog_color_to_colorf(color);
+    
+    cog_renderer* r = window->renderer;
+    r->auto_origin = (cog_vec2){ x, y };
+
+    cog_batch* batch = _cog_get_batch(r, 0);
+
+    for (int i = 0; i < segments; i++) {
+        float theta1 = i * angle_step;
+        float theta2 = (i + 1) * angle_step;
+    
+        float cos1 = cosf(theta1), sin1 = sinf(theta1);
+        float cos2 = cosf(theta2), sin2 = sinf(theta2);
+
+        float p1x = x + r_out * cos1, p1y = y + r_out * sin1;
+        float p2x = x + r_out * cos2, p2y = y + r_out * sin2;
+
+        float p3x = x + r_in * cos1, p3y = y + r_in * sin1;
+        float p4x = x + r_in * cos2, p4y = y + r_in * sin2;
+
+        _cog_push_vertex(r, (cog_vertex){ p1x, p1y, z, c.r, c.g, c.b, c.a, 0.0f, 0.0f });
+        _cog_push_vertex(r, (cog_vertex){ p2x, p2y, z, c.r, c.g, c.b, c.a, 0.0f, 0.0f });
+        _cog_push_vertex(r, (cog_vertex){ p3x, p3y, z, c.r, c.g, c.b, c.a, 0.0f, 0.0f });
+
+        _cog_push_vertex(r, (cog_vertex){ p2x, p2y, z, c.r, c.g, c.b, c.a, 0.0f, 0.0f });
+        _cog_push_vertex(r, (cog_vertex){ p3x, p3y, z, c.r, c.g, c.b, c.a, 0.0f, 0.0f });
+        _cog_push_vertex(r, (cog_vertex){ p4x, p4y, z, c.r, c.g, c.b, c.a, 0.0f, 0.0f });
+
+        batch->vertex_count += 6;
+    }
+}
+
 void cog_draw_texture(cog_window* window, cog_texture* texture, float x, float y, float width, float height, cog_color color) {
     float x1 = x;
     float y1 = y;
@@ -1201,7 +1373,8 @@ void cog_draw_texture(cog_window* window, cog_texture* texture, float x, float y
     cog_colorf c = cog_color_to_colorf(color);
     
     cog_renderer* r = window->renderer;
-    
+    r->auto_origin = (cog_vec2){ x + width * 0.5f, y + height * 0.5f };
+
     cog_batch* batch = _cog_get_batch(r, texture->id);
 
     _cog_push_vertex(r, (cog_vertex){ x1, y1, z, c.r, c.g, c.b, c.a, 0.0f, 0.0f });
@@ -1228,7 +1401,13 @@ void cog_draw_text(cog_window* window, cog_font* font, const char* text, float x
     float cursor_y = y + ascent_px;
 
     cog_colorf c = cog_color_to_colorf(color);
+
     cog_renderer* r = window->renderer;
+    if (r->rotation != 0.0f && r->rotation_origin.x == -1.0f && r->rotation_origin.y == -1.0f) {
+        cog_vec2 size = cog_measure_text(font, text, fontsize);
+        r->auto_origin = (cog_vec2){ x + size.x * 0.5f, y + size.y * 0.5f };
+    }
+
     cog_batch* batch = _cog_get_batch(r, font->texture->id);
 
     const char* ptr = text;

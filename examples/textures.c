@@ -12,11 +12,11 @@ int main() {
     while(!cog_window_should_close(window)) {
         cog_poll_events();
 
-        cog_clear_background((cog_color){ 0x00, 0x00, 0x00, 0xff });
+        cog_clear_background((cog_color){ 20, 20, 20, 255 });
 
-        cog_draw_texture(window, texture_1, 0, 0, 300, 300, (cog_color){ 0xff, 0xff, 0xff, 0xff });
-        cog_draw_texture(window, texture_2, 300, 0, 300, 300, (cog_color){ 0xff, 0xff, 0xff, 0xff });
-        cog_draw_texture(window, texture_3, 600, 0, 300, 300, (cog_color){ 0xff, 0xff, 0xff, 0xff });
+        cog_draw_texture(window, texture_1, 0, 0, 300, 300, (cog_color){ 255, 255, 255, 255 });
+        cog_draw_texture(window, texture_2, 300, 0, 300, 300, (cog_color){ 255, 255, 255, 255 });
+        cog_draw_texture(window, texture_3, 600, 0, 300, 300, (cog_color){ 255, 255, 255, 255 });
 
         cog_render(window);
     }
